@@ -1,4 +1,4 @@
-# Aither Weather V22 ⚡🌩️
+# Aither Weather V25 ⚡🌩️
 
 A dark/neon weather web app with a **real radar over a real map**, a 48-hour
 outlook, 7-day forecasts, favorites, themes, offline support, and a built-in
@@ -158,6 +158,154 @@ Fullscreen button to come back.
 - Keyboard accessible: the scope is a focusable control, `Enter`/`Space`
   toggles it
 - Set `radar.fullscreenOnTap = false` in `config.js` to require the button
+
+### 📊 Every tile opens (V25)
+
+A tile shows one number. That number nearly always has a **shape over the day** —
+UV peaks at noon, wind picks up in the afternoon, humidity falls as the
+temperature climbs — and the shape is usually the part worth knowing.
+
+So every tile is now a button, and opens a sheet with that metric charted across
+the day, a strip of dates to move between days, and a sentence saying what the
+shape means. Conditions, UV index, wind, precipitation, visibility, humidity and
+pressure all have one. It is one panel, not seven: a metric is a *definition* in
+`metricsheet.js` — where its numbers come from, how to write one, what to say
+about a day of them — and adding another is an entry in a table.
+
+Three rules the chart follows, because each is a way this kind of thing quietly
+lies:
+
+- **The past is dashed and the future is solid**, with a marker at now. A single
+  continuous line presents a recorded observation and a model's guess as the
+  same kind of fact. This is the claim the whole feature rests on, so the test
+  for it samples the line's own pixels either side of the now-marker and demands
+  the earlier half have more gaps.
+- **The axis carries real values and real hours** — and cannot show a value the
+  metric can't take. The first version drew a UV axis reaching **−1**, and
+  clipped midnight to read "2AM". Both are wrong numbers on an axis, not
+  cosmetic problems.
+- **A metric with no hourly data draws nothing and says so.** An empty axis is
+  an invitation to read meaning into blank space.
+
+The summaries are derived from the series they sit under, so they cannot
+describe a peak the chart does not show — "The peak UV index today is 9. Levels
+of Moderate or higher are reached from 9:00 AM to 6:00 PM" is computed by
+finding the first and last hour at or above 3.
+
+**UV gets the published WHO bands** behind the curve, so the number means
+something without a legend. **Wind gets direction arrows** along the top, since
+a speed chart alone can't tell you where it's coming from — and they point where
+the wind is *going*, which is the opposite of the direction it is named for.
+
+**The wind tile** now carries three labelled facts — Wind, Gusts, Direction —
+as the reference does. V23 put the gust in a sentence and suppressed it when it
+barely differed from the steady wind, because a sentence repeating the number
+above it is noise. A labelled row is a fact rather than a remark, so it is
+always shown.
+
+### 🤖 The bot, optionally with a real model behind it (V24)
+
+The Wether Bot writes its lines from template pools. That is why the app works
+with no key, no account and no network beyond the weather itself, and **that
+does not change** — the built-in bot is still the default and is still the
+fallback for everything.
+
+What V24 adds is a choice: **Settings → Wether Bot brain → Google Gemini**, plus
+your own API key, and the bot writes rather than assembles.
+
+**Where the key lives.** In your browser's `localStorage`, put there by you. It
+is never in this repository, never in `config.js`, and sent nowhere except
+Google's own endpoint. It travels in an `x-goog-api-key` header rather than a
+query string, because a URL ends up in history, logs and referrers.
+
+Be clear about the trade, because the app is:
+
+- A key in a browser is readable by **anyone who can open devtools on that
+  browser**.
+- It is **not** shared with other visitors — `localStorage` is per-browser, so
+  publishing this site does not publish your key. Each person brings their own
+  or uses the built-in bot.
+- It is stored outside the app's own storage namespace and outside settings, so
+  the account transfer code — which exports settings wholesale — **cannot**
+  carry it. There is a test for that.
+- The key is never shown back to you in full, only as `AIza…1234`.
+
+For a personal key on a personal machine that is a reasonable place for it. For
+a key that matters, put it behind a server you control and call that instead.
+The settings panel says so where you enter it.
+
+**Failure is not an error state.** No key, no network, a rejected key, a quota
+that has run out, a blocked response, a retired model, a slow reply — every one
+falls back to the built-in bot, and you get a roast. The local line goes up
+*immediately* and Gemini replaces it if and when it arrives, so nobody watches a
+spinner where a joke should be. The badge beside the bot's name says which brain
+wrote the line, because "the model said it" and "a template said it" are
+different claims.
+
+**Two bugs that only a real API call could find.** The stubs were green and
+both of these were still wrong:
+
+1. `gemini-2.0-flash` — the obvious default — **has been retired**. Google
+   answers 404 and tells you to move on. Hence a model picker, and an error that
+   says "that model has been retired, pick another one".
+2. The reasoning models spend the output budget *thinking*. A live call to
+   `gemini-3.6-flash` burned **886 tokens of thinking to produce a 31-token
+   joke**, so the original 120-token cap returned the words "It's a" and
+   stopped. The budget is 2048 now, and the default is `gemini-3.5-flash-lite`,
+   which wrote a better line in 28 tokens with no thinking at all.
+
+Both are in the test suite now, as fixtures shaped like the real responses.
+
+### 📐 Numbers you can act on (V23)
+
+Every feature in this version replaces a figure people cannot do anything with
+by one they can.
+
+**Rain as an amount.** The precipitation tile led with a probability, which
+tells you nothing about whether to move the barbecue. It now leads with how
+much has actually fallen today and names the next wet day with its amount —
+"Next expected is 0.15" on Thursday." The probability is still there, one line
+down, where it belongs. Nothing today reads `0"`, not `0.00"`; an amount too
+small to round is called a **trace**, because zero is a claim that nothing fell.
+
+**Gusts.** The wind tile shows the gust that actually knocks the parasol over —
+but only when it is meaningfully above the steady wind, since otherwise it is
+the same fact printed twice.
+
+**A barometer that has to have moved to say it moved.** A single reading cannot
+be rising or falling, so the trend is measured against the reading three hours
+ago from the hourly series, with a 0.02 inHg deadband. Below that the honest
+answer is "steady", not a direction picked out of noise. The dial draws an
+arrow; the tile also *says* it in words, because the dial is `aria-hidden` and
+a fact only available to people who can see it is not available.
+
+**An Averages tile, with real history behind it.** V21 deliberately left this
+out — Apple's version compares today against a climate normal, and this app had
+no history to average. It does now: Open-Meteo publishes a free, key-less
+archive, and `normals.js` fetches the same calendar date across the last ten
+years and averages the daily maximum. That is a genuine climate normal for that
+date, not an average of the week or the month.
+
+It is careful about the ways this goes wrong:
+
+- Fewer than five usable years and there is **no tile** rather than a confident
+  wrong number.
+- 29 February borrows the 28th — three years in four it does not exist, so its
+  sample is a quarter the size of every other date's.
+- The wording says "Average of 10 years, 2015–2024", never "normal": the
+  published WMO normal is a 30-year window and this is not one.
+- One request per place per day, cached, and the rest of the page never waits
+  on it.
+
+**A sentence over the hour row** — "Clear conditions expected around 5PM. Wind
+gusts are up to 22 mph." — read off the series rather than written in advance,
+so it cannot describe weather that is not in the forecast. When nothing changes
+it says so instead of inventing an event.
+
+**Where the forecast is actually for.** A city name is not a place: two towns
+share one, and a geolocated fix lands on coordinates rather than an address. The
+detail card now ends with the place, its coordinates, and an **Open in Maps**
+link (OpenStreetMap — no key, no account).
 
 ### 🧭 Reading order, and an hour row (V22)
 
@@ -661,7 +809,7 @@ dependencies** — `package.json` exists only for the tests.
 ## Project structure
 
 ```
-AitherWeather-V22/
+AitherWeather-V25/
 ├── index.html      # App shell / markup
 ├── styles.css      # All styling + the three themes (CSS variables)
 ├── app.js          # Main app: search, weather, favorites, settings
@@ -686,6 +834,9 @@ AitherWeather-V22/
 ├── icons.js        # Weather + interface icons (drawn, not emoji)
 ├── weatheranim.js  # The sky: full-page backdrop + the strip under the hero
 ├── tiles.js        # The detail tiles and their small drawings
+├── normals.js      # Climate normals from the key-less Open-Meteo archive
+├── gemini.js       # Optional: the bot with your own Google Gemini key
+├── metricsheet.js  # The per-metric day sheet and its chart engine
 ├── icons/          # PWA icons (192, 512, maskable)
 ├── config.js       # Central configuration + defaults
 ├── storage.js      # Safe localStorage wrapper
@@ -787,7 +938,7 @@ on the **Build desktop apps** action) and GitHub builds all three platforms
 natively and attaches them to a release:
 
 ```bash
-git tag v22.0.0 && git push origin v22.0.0
+git tag v25.0.0 && git push origin v25.0.0
 ```
 
 | Platform | Files |

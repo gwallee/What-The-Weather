@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0a0e17" />
-  <meta name="description" content="Aither Weather V22 — a neon weather app with a fullscreen animated radar over a real map, a 48-hour outlook, 7-day forecasts, alerts, favorites, themes, offline support, and a built-in local AI that roasts the weather. No API keys required." />
-  <title>Aither Weather V22 ⚡🌩️</title>
+  <meta name="description" content="Aither Weather V25 — a neon weather app with a fullscreen animated radar over a real map, a 48-hour outlook, 7-day forecasts, alerts, favorites, themes, offline support, and a built-in local AI that roasts the weather. No API keys required." />
+  <title>Aither Weather V25 ⚡🌩️</title>
   <link rel="icon" type="image/svg+xml" href="logo.svg" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="manifest" href="manifest.json" />
@@ -187,6 +187,7 @@
            next few hours at a glance, with sunrise and sunset dropped
            in at the hour they happen. The chart underneath is for the
            shape of the whole period, which a row cannot show. -->
+      <p class="hourly-summary" id="hourlySummary"></p>
       <div class="hour-strip-wrap">
         <ol class="hour-strip" id="hourStrip" aria-label="Hour by hour"></ol>
       </div>
@@ -217,13 +218,13 @@
            the rest. -->
       <div class="tile-grid" id="tileGrid">
 
-        <article class="tile" data-tile="feels">
+        <article class="tile tile-action" data-tile="feels" data-metric="conditions" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="thermometer" data-ui-size="15"></span>Feels like</h3>
           <p class="tile-value" id="wxFeels">--°</p>
           <p class="tile-note" id="feelsNote"></p>
         </article>
 
-        <article class="tile" data-tile="uv">
+        <article class="tile tile-action" data-tile="uv" data-metric="uv" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="sun" data-ui-size="15"></span>UV index</h3>
           <p class="tile-value"><span id="wxUv">--</span></p>
           <p class="tile-word" id="uvWord"></p>
@@ -233,9 +234,13 @@
           <p class="tile-note" id="uvNote"></p>
         </article>
 
-        <article class="tile" data-tile="wind">
+        <article class="tile tile-action" data-tile="wind" data-metric="wind" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="wind" data-ui-size="15"></span>Wind</h3>
-          <p class="tile-value" id="wxWind">-- mph</p>
+          <dl class="wind-facts">
+            <div><dt>Wind</dt><dd id="wxWind">-- mph</dd></div>
+            <div><dt>Gusts</dt><dd id="wxGusts">--</dd></div>
+            <div><dt>Direction</dt><dd id="wxWindDir">--</dd></div>
+          </dl>
           <div class="wind-dial" aria-hidden="true">
             <svg viewBox="0 0 100 100" class="wind-dial-svg">
               <circle cx="50" cy="50" r="40" class="wind-dial-ring" />
@@ -248,19 +253,21 @@
           <p class="tile-note" id="windNote"></p>
         </article>
 
-        <article class="tile" data-tile="precip">
+        <article class="tile tile-action" data-tile="precip" data-metric="precip" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="droplet" data-ui-size="15"></span>Precipitation</h3>
-          <p class="tile-value" id="wxRain">--%</p>
+          <p class="tile-value" id="precipToday">--</p>
+          <p class="tile-word">Today</p>
           <p class="tile-note" id="precipNote"></p>
+          <p class="tile-sub">Chance today: <span id="wxRain">--%</span></p>
         </article>
 
-        <article class="tile" data-tile="visibility">
+        <article class="tile tile-action" data-tile="visibility" data-metric="visibility" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="eye" data-ui-size="15"></span>Visibility</h3>
           <p class="tile-value" id="wxVisibility">--</p>
           <p class="tile-note" id="visibilityNote"></p>
         </article>
 
-        <article class="tile" data-tile="humidity">
+        <article class="tile tile-action" data-tile="humidity" data-metric="humidity" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="humidity" data-ui-size="15"></span>Humidity</h3>
           <p class="tile-value" id="wxHumidity">--%</p>
           <p class="tile-note">The dew point is <span id="wxDew">--</span> right now.</p>
@@ -297,6 +304,17 @@
           <p class="tile-note" id="aqiAdvice"></p>
         </article>
 
+        <article class="tile" data-tile="averages" id="averagesTile" hidden>
+          <h3 class="tile-head"><span class="btn-ico" data-ui-icon="chart" data-ui-size="15"></span>Averages</h3>
+          <p class="tile-value" id="avgDelta">--</p>
+          <p class="tile-word" id="avgWord"></p>
+          <dl class="avg-facts">
+            <div><dt>Today</dt><dd id="avgToday">--</dd></div>
+            <div><dt>Average</dt><dd id="avgNormal">--</dd></div>
+          </dl>
+          <p class="tile-note" id="avgNote"></p>
+        </article>
+
         <article class="tile tile-action" data-tile="hilo" id="wxHiLoStat"
                  role="button" tabindex="0"
                  title="Tap for the temperature trend"
@@ -306,12 +324,16 @@
           <p class="tile-note" id="hiLoNote"></p>
         </article>
 
-        <article class="tile" data-tile="pressure">
+        <article class="tile tile-action" data-tile="pressure" data-metric="pressure" role="button" tabindex="0">
           <h3 class="tile-head"><span class="btn-ico" data-ui-icon="gauge" data-ui-size="15"></span>Pressure</h3>
           <div class="pressure-dial" aria-hidden="true">
             <canvas id="pressureDial"></canvas>
           </div>
           <p class="tile-value tile-value-dial" id="wxPressure">--</p>
+          <!-- The dial is a picture and aria-hidden, so the trend it
+               draws has to exist as words too or it is only available
+               to people who can see it. -->
+          <p class="tile-sub" id="pressureTrend"></p>
           <p class="tile-scale-ends" aria-hidden="true"><span>Low</span><span>High</span></p>
         </article>
 
@@ -327,6 +349,20 @@
 
       <div class="wx-updated" id="wxUpdated"></div>
 
+      <!-- Where this forecast is actually for. A city name is not a
+           place: two towns share one, and a geolocated fix lands on
+           coordinates rather than an address. Saying the coordinates
+           and offering a map is how somebody checks. -->
+      <div class="place-footer" id="placeFooter" hidden>
+        <div class="place-lines">
+          <strong id="placeName">—</strong>
+          <span class="place-coords" id="placeCoords"></span>
+        </div>
+        <a class="btn btn-small" id="openInMaps" target="_blank" rel="noopener noreferrer" href="#">
+          <span class="btn-ico" data-ui-icon="map" data-ui-size="15"></span> Open in Maps
+        </a>
+      </div>
+
       <!-- Built-in roast: part of the weather card, not a separate panel -->
       <div class="roast-inline">
         <div class="roast-head">
@@ -334,6 +370,7 @@
           <span class="roast-meta">
             <span class="roast-context" id="roastContext">Right now</span>
             <span class="roast-personality" id="roastPersonality"></span>
+            <span class="roast-brain" id="botBadge" hidden></span>
           </span>
         </div>
         <p class="roast-text" id="roastText">Load some weather and I'll tell you what I really think, <span data-username>DJTheBest</span>.</p>
@@ -543,6 +580,46 @@
     </div>
 
     <div class="setting-group">
+      <label for="botBrainSelect">Wether Bot brain</label>
+      <select id="botBrainSelect"></select>
+      <p class="setting-hint">Built-in works with no key, no account and no network.
+        Gemini writes its lines with Google's model, using a key you provide.</p>
+    </div>
+
+    <div class="setting-group" id="geminiGroup" hidden>
+      <label for="geminiKeyInput">Google Gemini API key</label>
+      <div class="setting-row">
+        <input type="password" id="geminiKeyInput" autocomplete="off"
+               spellcheck="false" placeholder="Paste your key" />
+        <button type="button" id="geminiSaveBtn" class="btn btn-small">Save</button>
+      </div>
+      <div class="setting-row">
+        <button type="button" id="geminiTestBtn" class="btn btn-small">Test the key</button>
+        <button type="button" id="geminiClearBtn" class="btn btn-small">Forget it</button>
+      </div>
+      <p class="setting-status" id="geminiStatus" role="status"></p>
+
+      <label for="geminiModelSelect">Model</label>
+      <select id="geminiModelSelect"></select>
+      <p class="setting-hint">Flash Lite writes a one-liner in a couple of dozen
+        tokens. The thinking models spend hundreds of tokens of your quota
+        reasoning about a joke first, and are slower for it.</p>
+
+      <!-- Said here rather than left to be discovered. A key in a
+           browser is readable by anyone who can open devtools on that
+           browser; what it is not is shared with other visitors. -->
+      <p class="setting-hint setting-warn">
+        The key is kept in <strong>this browser only</strong> and sent nowhere
+        except Google. It is never part of the app's code, so publishing this
+        site does not publish your key — but anyone who can open developer
+        tools on this browser can read it. Use a key you are willing to rotate,
+        and <a href="https://aistudio.google.com/apikey" target="_blank"
+        rel="noopener noreferrer">revoke it</a> if you ever paste it somewhere
+        public. Google bills this key for what the bot uses.
+      </p>
+    </div>
+
+    <div class="setting-group">
       <label class="toggle-row" for="autoRoastToggle">
         <span>Automatic weather roasts</span>
         <input type="checkbox" id="autoRoastToggle" />
@@ -743,6 +820,38 @@
   </div>
 
   <!-- ================= A day in detail ================= -->
+  <!-- ================= Metric detail sheet =================
+
+       Every tile opens one of these: the metric charted across the
+       chosen day, past dashed and future solid, with a sentence
+       saying what the shape means. One panel serves every metric —
+       adding one is a definition in metricsheet.js, not a new box. -->
+  <div class="modal-overlay" id="metricSheetOverlay" hidden></div>
+  <section class="temp-modal metric-sheet" id="metricSheet" role="dialog"
+           aria-modal="true" aria-labelledby="sheetTitle" hidden>
+    <div class="temp-modal-head">
+      <div>
+        <h2 id="sheetTitle"></h2>
+        <p class="temp-modal-summary" id="sheetDate"></p>
+      </div>
+      <button type="button" id="metricSheetClose" class="btn btn-small"
+              aria-label="Close"><span class="btn-ico" data-ui-icon="close" data-ui-size="15"></span></button>
+    </div>
+
+    <div class="sheet-dates" id="sheetDates" role="group" aria-label="Pick a day"></div>
+
+    <p class="sheet-value" id="sheetValue">--</p>
+    <p class="sheet-sub" id="sheetSub"></p>
+    <div class="sheet-legend" id="sheetLegend" hidden></div>
+
+    <div class="sheet-chart-wrap">
+      <canvas id="sheetChart" aria-label="Hour by hour for this day"></canvas>
+      <p class="sheet-empty" id="sheetEmpty" hidden></p>
+    </div>
+
+    <p class="sheet-summary" id="sheetSummary"></p>
+  </section>
+
   <div class="modal-overlay" id="dayModalOverlay" hidden></div>
   <div class="temp-modal day-modal" id="dayModal" role="dialog" aria-modal="true"
        aria-labelledby="dayModalTitle" tabindex="-1" hidden>
@@ -779,6 +888,9 @@
   <script src="icons.js"></script>
   <script src="weatheranim.js"></script>
   <script src="tiles.js"></script>
+  <script src="normals.js"></script>
+  <script src="gemini.js"></script>
+  <script src="metricsheet.js"></script>
   <script src="storage.js"></script>
   <script src="themes.js"></script>
   <script src="units.js"></script>

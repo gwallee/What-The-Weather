@@ -1,5 +1,5 @@
 /* ============================================================
-   Aither Weather V22 — app.js
+   Aither Weather V25 — app.js
    Search, weather (NWS primary + Open-Meteo companion), hourly
    outlook, alerts, radar wiring, favorites, settings, roasts,
    offline snapshot, and PWA registration.
@@ -12,6 +12,10 @@
   const state = {
     location: null,
     weather: null,
+    // Counts roasts started, so a slow Gemini reply cannot overwrite a
+    // newer line that was asked for while it was in flight.
+    roastToken: 0,
+    normal: null,
     daily: [],
     hours: [],
     detail: {},
@@ -143,14 +147,23 @@
       latitude: String(location.lat),
       longitude: String(location.lon),
       current: ['temperature_2m', 'apparent_temperature', 'relative_humidity_2m', 'weather_code',
-                'wind_speed_10m', 'wind_direction_10m', 'is_day', 'pressure_msl',
-                'dew_point_2m'].join(','),
-      hourly: ['temperature_2m', 'precipitation_probability', 'weather_code',
-               'wind_speed_10m', 'visibility'].join(','),
+                'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'is_day',
+                'pressure_msl', 'dew_point_2m', 'precipitation'].join(','),
+      // pressure_msl hourly is what makes a real barometric trend
+      // possible: one reading cannot be rising or falling.
+      // Everything the per-metric day charts draw. All of it hourly,
+      // because a tile that opens a chart of one number needs that
+      // number for every hour, not a daily maximum.
+      hourly: ['temperature_2m', 'apparent_temperature', 'relative_humidity_2m',
+               'precipitation_probability', 'precipitation', 'weather_code',
+               'wind_speed_10m', 'wind_gusts_10m', 'wind_direction_10m',
+               'visibility', 'pressure_msl', 'uv_index'].join(','),
       minutely_15: ['precipitation', 'precipitation_probability'].join(','),
       daily: ['weather_code', 'temperature_2m_max', 'temperature_2m_min',
-              'precipitation_probability_max', 'sunrise', 'sunset', 'uv_index_max'].join(','),
+              'precipitation_probability_max', 'precipitation_sum', 'wind_gusts_10m_max',
+              'sunrise', 'sunset', 'uv_index_max'].join(','),
       temperature_unit: WTW_CONFIG.weather.temperatureUnit,
+      precipitation_unit: WTW_CONFIG.weather.precipitationUnit,
       wind_speed_unit: WTW_CONFIG.weather.windSpeedUnit,
       timezone: 'auto',
       forecast_days: String(chosenForecastDays()),
@@ -230,13 +243,63 @@
       if (metres != null) visibilityMi = metres * 0.000621371;
     }
 
+    /* Barometric trend, measured rather than asserted.
+
+       A single reading cannot be rising or falling, so this compares
+       now against three hours ago from the hourly series — which is
+       there because past_days=1 is already being asked for. The
+       0.02 inHg deadband is roughly the resolution people can act on;
+       below it the honest answer is "steady", not a direction picked
+       from noise. */
+    const pressureTrend = (() => {
+      const series = h.pressure_msl;
+      const times = h.time;
+      if (!Array.isArray(series) || !Array.isArray(times)) return null;
+      const now = Date.now();
+      const near = (target) => {
+        let best = -1, gap = Infinity;
+        for (let i = 0; i < times.length; i++) {
+          const dt = Math.abs(new Date(times[i]).getTime() - target);
+          if (dt < gap && series[i] != null) { gap = dt; best = i; }
+        }
+        // More than 90 minutes off the mark is not the hour asked for.
+        return gap <= 90 * 60000 ? series[best] : null;
+      };
+      const nowMb = near(now);
+      const thenMb = near(now - 3 * 3600000);
+      if (nowMb == null || thenMb == null) return null;
+      const deltaInHg = (nowMb - thenMb) * 0.0295300;
+      if (Math.abs(deltaInHg) < 0.02) return 'steady';
+      return deltaInHg > 0 ? 'rising' : 'falling';
+    })();
+
+    /* The next wet day, and how much. "80% chance" says nothing about
+       whether to move the barbecue; "0.15 inches on Thursday" does.
+       Only days from tomorrow on: today already has its own figure. */
+    const nextPrecip = (() => {
+      const sums = d.precipitation_sum;
+      if (!Array.isArray(sums)) return null;
+      for (let i = todayIdx + 1; i < times.length; i++) {
+        const amount = sums[i];
+        if (amount != null && amount >= 0.01) {
+          return { dateISO: at(times, i), amountIn: amount };
+        }
+      }
+      return null;
+    })();
+
     const detail = {
       sunrise: at(d.sunrise, todayIdx),
       sunset: at(d.sunset, todayIdx),
       uvIndex: at(d.uv_index_max, todayIdx),
       dewPointF: c.dew_point_2m ?? null,
       pressureInHg: c.pressure_msl != null ? c.pressure_msl * 0.0295300 : null,
+      pressureTrend,
       visibilityMi,
+      precipTodayIn: at(d.precipitation_sum, todayIdx),
+      nextPrecip,
+      windGustMph: c.wind_gusts_10m ?? null,
+      gustMaxTodayMph: at(d.wind_gusts_10m_max, todayIdx),
     };
 
     const hours = WTWHourly.fromOpenMeteo(data, chosenHourlyHours());
@@ -417,6 +480,7 @@
       daily: state.daily,
       hours: state.hours,
       air: state.air,
+      normal: state.normal,
       nowcastText: state.nowcastText || '',
     });
   }
@@ -603,6 +667,103 @@
       state.air = null;
     }
     renderAir();
+  }
+
+  /* The climate normal is the slowest thing on the page and the least
+     important, so it is fetched on its own and the tile appears when
+     it arrives. A location with too little history, or an archive
+     that is down, simply leaves the tile hidden — the rest of the app
+     never waits on it and never shows a placeholder in its place. */
+  async function loadNormals(location) {
+    state.normal = null;
+    if (!window.WTWNormals) return;
+    try {
+      state.normal = await WTWNormals.fetchNormal(location, new Date());
+    } catch (err) {
+      console.warn('[app] climate normal unavailable', err);
+      state.normal = null;
+    }
+    renderTiles();
+  }
+
+  /* Where this forecast is actually for. A city name is not a place —
+     two towns share one, and a geolocated fix lands on coordinates
+     rather than an address — so the coordinates are shown and a map
+     link offered for anybody who wants to check. */
+  function renderPlace(location) {
+    const footer = $('placeFooter');
+    if (!footer || !location) return;
+    const lat = Number(location.lat), lon = Number(location.lon);
+    if (!isFinite(lat) || !isFinite(lon)) { footer.hidden = true; return; }
+    footer.hidden = false;
+    $('placeName').textContent = location.name || '—';
+    $('placeCoords').textContent =
+      `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'}, ` +
+      `${Math.abs(lon).toFixed(4)}° ${lon >= 0 ? 'E' : 'W'}`;
+    const link = $('openInMaps');
+    if (link) {
+      // OpenStreetMap rather than a vendor's map: no key, no account,
+      // and it opens in whatever the device already uses for the web.
+      link.href = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=11/${lat}/${lon}`;
+    }
+  }
+
+  function setGeminiStatus(text, kind) {
+    const el = $('geminiStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    el.dataset.kind = kind || '';
+    el.hidden = !text;
+  }
+
+  /* The key field never shows the key. It shows that a key is there,
+     masked — enough to recognise which one, not enough to use. Typing
+     into it replaces it; leaving it alone keeps what is saved. */
+  function initGeminiKey() {
+    const input = $('geminiKeyInput');
+    const save = $('geminiSaveBtn');
+    const test = $('geminiTestBtn');
+    const clear = $('geminiClearBtn');
+    if (!input || !window.WTWGemini) return;
+
+    const reflect = () => {
+      if (WTWGemini.hasKey()) {
+        input.value = '';
+        input.placeholder = `Saved: ${WTWGemini.maskedKey()}`;
+      } else {
+        input.value = '';
+        input.placeholder = 'Paste your key';
+      }
+    };
+    reflect();
+
+    if (save) save.addEventListener('click', () => {
+      const value = input.value.trim();
+      if (!value) { setGeminiStatus('Nothing to save — paste a key first.', 'warn'); return; }
+      if (value.length < 20) { setGeminiStatus('That looks too short to be a key.', 'warn'); return; }
+      WTWGemini.setKey(value);
+      reflect();
+      setGeminiStatus('Saved in this browser. Try "Test the key".', 'ok');
+    });
+
+    if (test) test.addEventListener('click', async () => {
+      setGeminiStatus('Asking Google…', '');
+      test.disabled = true;
+      try {
+        const result = await WTWGemini.testKey();
+        setGeminiStatus(result.ok
+          ? `Working. It said: "${result.sample}"`
+          : result.reason, result.ok ? 'ok' : 'warn');
+      } finally {
+        test.disabled = false;
+      }
+    });
+
+    if (clear) clear.addEventListener('click', () => {
+      WTWGemini.setKey('');
+      reflect();
+      setGeminiStatus('Forgotten. The built-in bot is writing the lines again.', 'ok');
+    });
   }
 
   /* ------------------------------------------------------------
@@ -850,7 +1011,7 @@
 
   /* ---------------- Roasts (Local AI 3.0) ---------------- */
 
-  function showRoast(text, context) {
+  function showRoast(text, context, { source = 'local' } = {}) {
     const el = $('roastText');
     el.classList.remove('pop');
     void el.offsetWidth;
@@ -865,17 +1026,76 @@
     WTWStorage.addRoastLog({
       text, context: context || 'Right now',
       personality: p, city: state.location ? state.location.name : '',
-      at: Date.now(),
+      source, at: Date.now(),
     });
     renderRoastLog();
   }
 
-  function doRoast() {
+  /* Which brain writes the line.
+
+     Gemini only when it is switched on AND a key is saved AND the
+     browser thinks it is online — all three, checked before a request
+     rather than discovered by one failing. Anything else, and any
+     failure at all, is the local bot. */
+  function brainIsGemini() {
+    return WTWStorage.getSettings().botBrain === 'gemini' &&
+      window.WTWGemini && WTWGemini.hasKey() && navigator.onLine !== false;
+  }
+
+  /* A roast nobody waits for is not a roast, so the local line goes up
+     first and Gemini replaces it when it arrives. Nobody watches a
+     spinner where a joke should be, and if the request fails the line
+     already on screen is the right one. */
+  async function doRoast() {
     if (!state.weather) {
       $('roastText').textContent = "Load some weather first — I can't roast a blank sky.";
       return;
     }
-    showRoast(LocalAI.generate(state.weather), 'Right now');
+
+    const local = LocalAI.generate(state.weather);
+    if (!brainIsGemini()) {
+      showRoast(local, 'Right now');
+      return;
+    }
+
+    showRoast(local, 'Right now');
+    const token = ++state.roastToken;
+    setBotBadge('thinking');
+    try {
+      const settings = WTWStorage.getSettings();
+      const line = await WTWGemini.ask(state.weather, {
+        personality: settings.personality,
+        username: settings.username,
+        context: 'the weather right now',
+      });
+      // A newer roast started while this one was in flight; that one
+      // owns the panel.
+      if (token !== state.roastToken) return;
+      if (line) showRoast(line, 'Right now', { source: 'gemini' });
+      setBotBadge('gemini');
+    } catch (err) {
+      if (token !== state.roastToken) return;
+      console.warn('[app] Gemini roast unavailable, keeping the local one', err.message);
+      setBotBadge(err.message === 'bad-key' ? 'badkey' : 'local');
+    }
+  }
+
+  /* The bot says which brain wrote the line, because "the AI said it"
+     and "a template said it" are different claims and the user is
+     entitled to know which one they are reading. */
+  function setBotBadge(kind) {
+    const el = $('botBadge');
+    if (!el) return;
+    const text = {
+      thinking: 'Gemini · thinking…',
+      gemini: 'Gemini',
+      local: 'Local · Gemini unreachable',
+      badkey: 'Local · Gemini key rejected',
+      offline: 'Local',
+    }[kind] || '';
+    el.textContent = text;
+    el.hidden = !text;
+    el.dataset.brain = kind;
   }
 
   /* ------------------------------------------------------------
@@ -1128,6 +1348,8 @@
       updateSaveButton();
       loadAlerts(location).then(saveSnapshot);
       loadAir(location);
+      loadNormals(location);
+      renderPlace(location);
       renderCompare({ refresh: true });
       saveSnapshot();
 
@@ -1311,6 +1533,37 @@
       });
       el.value = String(value);
     };
+
+    /* ---- The bot's brain ---- */
+
+    const brainSel = $('botBrainSelect');
+    const geminiGroup = $('geminiGroup');
+    const showGeminiGroup = () => {
+      if (geminiGroup) geminiGroup.hidden = !brainSel || brainSel.value !== 'gemini';
+    };
+    if (brainSel) {
+      fillSelect(brainSel, WTW_CONFIG.botBrains || [], s.botBrain);
+      showGeminiGroup();
+      brainSel.addEventListener('change', () => {
+        WTWStorage.saveSettings({ botBrain: brainSel.value });
+        showGeminiGroup();
+        if (brainSel.value === 'gemini' && window.WTWGemini && !WTWGemini.hasKey()) {
+          setGeminiStatus('Add a key below and the bot will start using it.', 'warn');
+        } else {
+          setGeminiStatus('', '');
+        }
+        toast(brainSel.value === 'gemini' ? 'Bot brain: Gemini' : 'Bot brain: built-in');
+      });
+    }
+    const modelSel = $('geminiModelSelect');
+    if (modelSel && window.WTWGemini) {
+      fillSelect(modelSel, WTW_CONFIG.geminiModels || [], WTWGemini.chosenModel());
+      modelSel.addEventListener('change', () => {
+        WTWStorage.saveSettings({ geminiModel: modelSel.value });
+        setGeminiStatus(`Model set to ${modelSel.options[modelSel.selectedIndex].text}.`, 'ok');
+      });
+    }
+    initGeminiKey();
 
     /* ---- Look: background, cards, corners, spacing ---- */
 
@@ -2108,6 +2361,34 @@
     WTWRadar.init('radarCanvas');
     WTWHourly.init('hourlyCanvas');
     WTWTempChart.init('tempChartCanvas');
+    if (window.WTWMetricSheet) {
+      WTWMetricSheet.init();
+      /* One listener on the grid rather than one per tile: the tiles
+         are static markup, but a delegated handler keeps working if
+         they ever stop being. Keyboard too — a role="button" that
+         only answers a mouse is not a button. */
+      const grid = $('tileGrid');
+      const openFor = (el) => {
+        const host = el.closest('[data-metric]');
+        if (!host) return;
+        WTWMetricSheet.open(host.dataset.metric, {
+          daily: state.daily,
+          hourlyRaw: state.hourlyRaw,
+          detail: state.detail,
+          weather: state.weather,
+        });
+      };
+      if (grid) {
+        grid.addEventListener('click', (e) => openFor(e.target));
+        grid.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          if (!e.target.closest('[data-metric]')) return;
+          e.preventDefault();
+          openFor(e.target);
+        });
+      }
+    }
+
     if (window.WTWScene) {
       WTWScene.init();
       WTWScene.setEnabled(WTWStorage.getSettings().sceneAnimation !== false);
